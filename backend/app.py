@@ -5,15 +5,18 @@ import string
 import random
 import re
 import os
-from logger import RequestLogger
+
 from dotenv import load_dotenv
+from middleware.logger_middleware import setup_logging
+
 
 load_dotenv()
+
 
 app = Flask(__name__)
 app.config["MONGO_URI"] = os.getenv("MONGO_URI", "mongodb://localhost:27017/urlshortener")
 mongo = PyMongo(app)
-RequestLogger(app)
+setup_logging(app)
 
 SHORTCODE_REGEX = re.compile(r'^[a-zA-Z0-9]{4,20}$')
 DEFAULT_EXPIRY_MINUTES = 30
