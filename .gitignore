@@ -1,29 +1,38 @@
-# Ignore Python cache files
+# Python
 __pycache__/
 *.py[cod]
-
-# Ignore environment files
 .env
-.venv
+.venv/
+*.sqlite3
+urls.db
 
-# Ignore VS Code settings
+# Node/React
+node_modules/
+build/
+dist/
+*.log
+*.cache
+*.env.local
+*.env.development.local
+*.env.test.local
+*.env.production.local
+
+# VS Code
 .vscode/
 
-# Ignore Jupyter Notebook checkpoints
-.ipynb_checkpoints/
-
-# Ignore OS files
+# OS
 .DS_Store
 Thumbs.db
+ehthumbs.db
+Icon?
 
-# Ignore log files
-*.log
+# Jupyter
+.ipynb_checkpoints/
 
-# Ignore compiled files
-*.exe
-*.dll
-*.so
-*.dylib
-
-# Ignore node modules
-node_modules/
+# Misc
+*.swp
+*.swo
+*.bak
+*.tmp
+*.orig
+*.lock

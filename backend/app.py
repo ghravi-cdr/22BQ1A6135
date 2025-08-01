@@ -1,42 +1,46 @@
+
 from flask import Flask, request, jsonify, redirect
-from flask_pymongo import PyMongo
+from flask_cors import CORS
+import sqlite3
 from datetime import datetime, timedelta
 import string
 import random
 import re
-import os
-
 from dotenv import load_dotenv
 from middleware.logger_middleware import setup_logging
-
+from models import get_db, close_db, init_db
 
 load_dotenv()
 
-
 app = Flask(__name__)
-app.config["MONGO_URI"] = os.getenv("MONGO_URI", "mongodb://localhost:27017/urlshortener")
-mongo = PyMongo(app)
 setup_logging(app)
-
+CORS(app)
+app.teardown_appcontext(close_db)
 SHORTCODE_REGEX = re.compile(r'^[a-zA-Z0-9]{4,20}$')
 DEFAULT_EXPIRY_MINUTES = 30
+
 
 # Service Layer
 class URLService:
     @staticmethod
     def generate_shortcode(length=6):
         chars = string.ascii_letters + string.digits
+        db = get_db()
         while True:
             code = ''.join(random.choices(chars, k=length))
-            if not mongo.db.urls.find_one({"shortcode": code}):
+            cur = db.execute('SELECT 1 FROM urls WHERE shortcode = ?', (code,))
+            if not cur.fetchone():
                 return code
 
     @staticmethod
     def is_shortcode_unique(code):
-        return not mongo.db.urls.find_one({"shortcode": code})
+        db = get_db()
+        cur = db.execute('SELECT 1 FROM urls WHERE shortcode = ?', (code,))
+        return not cur.fetchone()
 
     @staticmethod
     def create_short_url(original_url, shortcode=None, expiry_minutes=None):
+        db = get_db()
         if shortcode:
             if not SHORTCODE_REGEX.match(shortcode):
                 return None, ("Invalid shortcode. Must be alphanumeric and 4-20 chars.", 400)
@@ -45,42 +49,65 @@ class URLService:
         else:
             shortcode = URLService.generate_shortcode()
         expiry = datetime.utcnow() + timedelta(minutes=expiry_minutes or DEFAULT_EXPIRY_MINUTES)
-        doc = {
-            "original_url": original_url,
-            "shortcode": shortcode,
-            "expiry": expiry,
-            "created_at": datetime.utcnow(),
-            "clicks": 0
-        }
-        mongo.db.urls.insert_one(doc)
+        try:
+            db.execute(
+                'INSERT INTO urls (original_url, shortcode, expiry, created_at, clicks) VALUES (?, ?, ?, ?, ?)',
+                (original_url, shortcode, expiry, datetime.utcnow(), 0)
+            )
+            db.commit()
+        except sqlite3.IntegrityError:
+            return None, ("Shortcode already in use.", 409)
         return shortcode, None
 
     @staticmethod
     def get_url(shortcode):
-        doc = mongo.db.urls.find_one({"shortcode": shortcode})
-        if not doc:
+        db = get_db()
+        cur = db.execute('SELECT * FROM urls WHERE shortcode = ?', (shortcode,))
+        row = cur.fetchone()
+        if not row:
             return None, ("Shortcode not found.", 404)
-        if doc["expiry"] < datetime.utcnow():
+        if row['expiry'] < datetime.utcnow():
             return None, ("Shortcode expired.", 410)
-        return doc, None
+        return dict(row), None
 
     @staticmethod
     def increment_click(shortcode):
-        mongo.db.urls.update_one({"shortcode": shortcode}, {"$inc": {"clicks": 1}})
+        db = get_db()
+        db.execute('UPDATE urls SET clicks = clicks + 1 WHERE shortcode = ?', (shortcode,))
+        db.commit()
 
     @staticmethod
     def get_analytics(shortcode):
-        doc = mongo.db.urls.find_one({"shortcode": shortcode})
-        if not doc:
+        db = get_db()
+        cur = db.execute('SELECT * FROM urls WHERE shortcode = ?', (shortcode,))
+        row = cur.fetchone()
+        if not row:
             return None, ("Shortcode not found.", 404)
         return {
-            "shortcode": shortcode,
-            "original_url": doc["original_url"],
-            "created_at": doc["created_at"],
-            "expiry": doc["expiry"],
-            "clicks": doc["clicks"]
+            "shortcode": row["shortcode"],
+            "original_url": row["original_url"],
+            "created_at": row["created_at"],
+            "expiry": row["expiry"],
+            "clicks": row["clicks"]
         }, None
 
+# Add stats endpoint for analytics
+@app.route("/stats", methods=["GET"])
+def stats():
+    db = get_db()
+    cur = db.execute('SELECT * FROM urls ORDER BY created_at DESC')
+    rows = cur.fetchall()
+    result = []
+    for row in rows:
+        result.append({
+            "short_url": f"{request.host_url}{row['shortcode']}",
+            "original_url": row["original_url"],
+            "created_at": str(row["created_at"]),
+            "expiry": str(row["expiry"]),
+            "clicks": row["clicks"],
+            "shortcode": row["shortcode"]
+        })
+    return jsonify(result)
 # Routes
 @app.route("/shorturls", methods=["POST"])
 def create_shorturl():
@@ -115,4 +142,6 @@ def handle_exception(e):
     return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
+    with app.app_context():
+        init_db()
     app.run(debug=True)
